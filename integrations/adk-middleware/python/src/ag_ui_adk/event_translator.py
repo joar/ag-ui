@@ -232,18 +232,18 @@ class EventTranslator:
         return len(self._deferred_confirm_events) > 0
 
     async def translate(
-        self, 
+        self,
         adk_event: ADKEvent,
         thread_id: str,
         run_id: str
     ) -> AsyncGenerator[BaseEvent, None]:
         """Translate an ADK event to AG-UI protocol events.
-        
+
         Args:
             adk_event: The ADK event to translate
             thread_id: The AG-UI thread ID
             run_id: The AG-UI run ID
-            
+
         Yields:
             One or more AG-UI protocol events
         """
@@ -251,14 +251,14 @@ class EventTranslator:
             # Check ADK streaming state using proper methods
             is_partial = getattr(adk_event, 'partial', False)
             turn_complete = getattr(adk_event, 'turn_complete', False)
-            
+
             # Check if this is the final response (contains complete message - skip to avoid duplication)
             is_final_response = False
             if hasattr(adk_event, 'is_final_response') and callable(adk_event.is_final_response):
                 is_final_response = adk_event.is_final_response()
             elif hasattr(adk_event, 'is_final_response'):
                 is_final_response = adk_event.is_final_response
-            
+
             # Determine action based on ADK streaming pattern
             should_send_end = turn_complete and not is_partial
 
@@ -266,7 +266,7 @@ class EventTranslator:
             if hasattr(adk_event, 'author') and adk_event.author == "user":
                 logger.debug("Skipping user event")
                 return
-            
+
             # Handle text content
             # --- THIS IS THE RESTORED LINE ---
             if adk_event.content and hasattr(adk_event.content, 'parts') and adk_event.content.parts:
@@ -274,7 +274,7 @@ class EventTranslator:
                     adk_event, thread_id, run_id
                 ):
                     yield event
-            
+
             # call _translate_function_calls function to yield Tool Events
             # Skip function calls from partial events - these are streaming previews in
             # PROGRESSIVE_SSE_STREAMING mode (enabled by default in google-adk >= 1.22.0).
@@ -297,11 +297,11 @@ class EventTranslator:
                         # Per AG-UI protocol: TEXT_MESSAGE_END must be sent before TOOL_CALL_START
                         async for event in self.force_close_streaming_message():
                             yield event
-                        
+
                         # Yield only non-LRO function call events
                         async for event in self._translate_function_calls(non_lro_calls):
                             yield event
-                        
+
             # Handle function responses and yield the tool response event
             # this is essential for scenerios when user has to render function response at frontend
             if hasattr(adk_event, 'get_function_responses'):
@@ -310,8 +310,8 @@ class EventTranslator:
                     # Function responses should be emmitted to frontend so it can render the response as well
                     async for event in self._translate_function_response(function_responses):
                         yield event
-                    
-            
+
+
             # Handle state changes
             if hasattr(adk_event, 'actions') and adk_event.actions:
                 if hasattr(adk_event.actions, 'state_delta') and adk_event.actions.state_delta:
@@ -323,8 +323,8 @@ class EventTranslator:
                     state_snapshot = adk_event.actions.state_snapshot
                     if state_snapshot is not None:
                         yield self._create_state_snapshot_event(state_snapshot)
-                
-            
+
+
             # Handle custom events or metadata
             if hasattr(adk_event, 'custom_data') and adk_event.custom_data:
                 yield CustomEvent(
@@ -332,7 +332,7 @@ class EventTranslator:
                     name="adk_metadata",
                     value=adk_event.custom_data
                 )
-                
+
         except Exception as e:
             logger.error(f"Error translating ADK event: {e}", exc_info=True)
             # Don't yield error events here - let the caller handle errors
@@ -370,16 +370,16 @@ class EventTranslator:
         run_id: str
     ) -> AsyncGenerator[BaseEvent, None]:
         """Translate text content from ADK event to AG-UI text message events.
-        
+
         Args:
             adk_event: The ADK event containing text content
             thread_id: The AG-UI thread ID
             run_id: The AG-UI run ID
-            
+
         Yields:
             Text message events (START, CONTENT, END)
         """
-        
+
         # Check for is_final_response *before* checking for text.
         # An empty final response is a valid stream-closing signal.
         is_final_response = False
@@ -387,7 +387,7 @@ class EventTranslator:
             is_final_response = adk_event.is_final_response()
         elif hasattr(adk_event, 'is_final_response'):
             is_final_response = adk_event.is_final_response
-        
+
         # Extract text from all parts, separating thought parts from regular text
         text_parts = []
         thought_parts = []
@@ -551,7 +551,7 @@ class EventTranslator:
                     delta=combined_text
                 )
                 yield content_event
-        
+
         # If turn is complete and not partial, emit END event
         if should_send_end:
             end_event = TextMessageEndEvent(
@@ -669,13 +669,17 @@ class EventTranslator:
                         if hasattr(long_running_function_call, 'args') and long_running_function_call.args:
                             # Convert args to string (JSON format)
                             import json
-                            args_str = json.dumps(long_running_function_call.args) if isinstance(long_running_function_call.args, dict) else str(long_running_function_call.args)
+                            from pydantic import TypeAdapter
+                            args_str = TypeAdapter(dict[str, Any]).dump_json(
+                                long_running_function_call.args
+                            ).decode()
+                            # args_str = json.dumps(long_running_function_call.args) if isinstance(long_running_function_call.args, dict) else str(long_running_function_call.args)
                             yield ToolCallArgsEvent(
                                 type=EventType.TOOL_CALL_ARGS,
                                 tool_call_id=long_running_function_call.id,
                                 delta=args_str
                             )
-                        
+
                         # Emit TOOL_CALL_END
                         yield ToolCallEndEvent(
                             type=EventType.TOOL_CALL_END,
@@ -684,7 +688,7 @@ class EventTranslator:
 
                         # Clean up tracking
                         self._active_tool_calls.pop(long_running_function_call.id, None)
-    
+
     async def _translate_function_calls(
         self,
         function_calls: list[types.FunctionCall],
@@ -798,7 +802,7 @@ class EventTranslator:
 
                     self._emitted_confirm_for_tools.add(tool_name)
 
-    
+
 
     async def _translate_function_response(
         self,
@@ -836,7 +840,7 @@ class EventTranslator:
                 tool_call_id=tool_call_id,
                 content=_serialize_tool_response(func_response.response)
             )
-  
+
     def _create_state_delta_event(
         self,
         state_delta: Dict[str, Any],
@@ -844,12 +848,12 @@ class EventTranslator:
         run_id: str
     ) -> StateDeltaEvent:
         """Create a state delta event from ADK state changes.
-        
+
         Args:
             state_delta: The state changes from ADK
             thread_id: The AG-UI thread ID
             run_id: The AG-UI run ID
-            
+
         Returns:
             A StateDeltaEvent
         """
@@ -862,35 +866,35 @@ class EventTranslator:
                 "path": f"/{key}",
                 "value": value
             })
-        
+
         return StateDeltaEvent(
             type=EventType.STATE_DELTA,
             delta=patches
         )
-    
+
     def _create_state_snapshot_event(
         self,
         state_snapshot: Dict[str, Any],
     ) -> StateSnapshotEvent:
         """Create a state snapshot event from ADK state changes.
-        
+
         Args:
             state_snapshot: The state changes from ADK
-            
+
         Returns:
             A StateSnapshotEvent
         """
- 
+
         return StateSnapshotEvent(
             type=EventType.STATE_SNAPSHOT,
             snapshot=state_snapshot
         )
-    
+
     async def force_close_streaming_message(self) -> AsyncGenerator[BaseEvent, None]:
         """Force close any open streaming message.
-        
+
         This should be called before ending a run to ensure proper message termination.
-        
+
         Yields:
             TEXT_MESSAGE_END event if there was an open streaming message
         """
@@ -1040,4 +1044,3 @@ def adk_events_to_messages(events: List[ADKEvent]) -> List[Message]:
             messages.append(assistant_message)
 
     return messages
-        
